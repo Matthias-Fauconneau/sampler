@@ -1,0 +1,12 @@
+[package]
+name = 'sfz'
+version = '0.0.0'
+authors = ['Matthias Fauconneau <matthias.fauconneau@gmail.com>']
+edition = '2018'
+
+[dependencies]
+fehler = ''
+framework = { version = '', path = '../../framework' }
+nom = ''
+serde = { version = '', features = ['derive'] }
+vmap = { version = '', path = '../../vmap' }

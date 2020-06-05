@@ -1,0 +1,11 @@
+[package]
+name = 'sampler'
+version = '0.0.0'
+authors = ['Matthias Fauconneau <matthias.fauconneau@gmail.com>']
+edition = '2018'
+
+[dependencies]
+anyhow = ''
+fehler = ''
+sfz = { version = '', path = 'sfz' }
+#alsa = ''
