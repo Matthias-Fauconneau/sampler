@@ -5,8 +5,10 @@ authors = ['Matthias Fauconneau <matthias.fauconneau@gmail.com>']
 edition = '2018'
 
 [dependencies]
+anyhow = ''
 fehler = ''
 framework = { version = '', path = '../../framework' }
-nom = ''
+#nom = ''
+lexical-core = ''
 serde = { version = '', features = ['derive'] }
 vmap = { version = '', path = '../../vmap' }
