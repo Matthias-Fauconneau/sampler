@@ -8,4 +8,4 @@ edition = '2018'
 anyhow = ''
 fehler = ''
 sfz = { version = '', path = 'sfz' }
-#alsa = ''
+alsa = ''

@@ -1,6 +1,9 @@
-#![feature(pattern)]
+#![feature(bool_to_option)]
 pub trait TryMap<T> { fn try_map<E, U, F:FnOnce(T)->Result<U, E>>(self, f: F) -> Result<Option<U>, E>; }
 impl<T> TryMap<T> for Option<T> { fn try_map<E, U, F:FnOnce(T) ->Result<U, E>>(self, f: F) -> Result<Option<U>, E> { self.map(f).transpose() } }
+
+pub trait TryThen { fn try_then<E, U, F:FnOnce()->Result<U, E>>(self, f: F) -> Result<Option<U>, E>; }
+impl TryThen for bool { fn try_then<E, U, F:FnOnce() ->Result<U, E>>(self, f: F) -> Result<Option<U>, E> { self.then(f).transpose() } }
 
 /*use nom::{IResult, error::{VerboseError, convert_error}};
 #[throws] fn parse<'t,O>(parser: impl Fn(&'t str) -> IResult<&'t str, O, VerboseError<&'t str>>, s: &mut &'t str) -> O {
@@ -41,10 +44,10 @@ impl<'de> Deserializer<'de> {
 	pub fn from_bytes(bytes: &'de [u8]) -> Self { Deserializer{bytes, terminator: None} }
 
 	fn peekn(&self, n: usize) -> &'de [u8] { &self.bytes[0..n.min(self.bytes.len())] }
-	#[throws] fn peek(&self) -> &u8 { self.bytes.get(0).ok_or(Error::custom("Unexpected end of file"))? }
-    #[throws] fn next(&mut self) -> u8 { let b = *self.peek()?; self.bytes = &self.bytes[1..]; b }
-	fn r#match(&mut self, b: &u8) -> bool { if let Ok(peek) = self.peek() { if peek == b { self.next().unwrap(); true } else { false } } else { false } }
-	#[throws] fn skip(&mut self, b: &u8) { ensure!(self.r#match(b), "Expected '{}', got '{}'", b, self.peek()?); }
+	fn peek(&self) -> Option<u8> { self.bytes.get(0).copied() }
+    #[throws] fn next(&mut self) -> u8 { let b = self.peek().ok_or(Error::custom("Unexpected end of file"))?; self.bytes = &self.bytes[1..]; b }
+	fn r#match(&mut self, b: u8) -> bool { if let Some(peek) = self.peek() { if peek == b { self.next().unwrap(); true } else { false } } else { false } }
+	#[throws] fn skip(&mut self, b: u8) { ensure!(self.r#match(b), "Expected '{}', got '{:?}'", b, self.peek().unwrap_or(b'\x1C')); }
 
 	fn while_not<P:Fn(&u8)->bool>(&mut self, predicate: P) -> &'de [u8] {
 		let s = self.bytes.split(predicate).next().unwrap(); self.bytes = &self.bytes[s.len()..]; s
@@ -65,7 +68,7 @@ impl<'de, 't> de::Deserializer<'de> for &'t mut Deserializer<'de> {
 	#[allow(unreachable_code)] #[throws] fn deserialize_any<V:Visitor<'de>>(self, visitor: V) -> V::Value {
 		throw!(Error::invalid_type(serde::de::Unexpected::Other("unimplemented"), &visitor))
 	}
-	serde::forward_to_deserialize_any!{char bytes byte_buf option unit unit_struct tuple tuple_struct map ignored_any bool u16 u32 u64 u128 i8 i16 i32 i64 i128 f64}
+	serde::forward_to_deserialize_any!{char bytes byte_buf option unit unit_struct tuple tuple_struct map ignored_any bool u16 u32 u64 u128 i16 i32 i64 i128 f64}
 
 	#[throws] fn deserialize_seq<V:Visitor<'de>>(self, visitor: V) -> V::Value {
 		struct Seq<'t, 'de: 't>(&'t mut Deserializer<'de>);
@@ -73,8 +76,10 @@ impl<'de, 't> de::Deserializer<'de> for &'t mut Deserializer<'de> {
 			type Error = Error;
 			#[throws] fn next_element_seed<T:de::DeserializeSeed<'de>>(&mut self, seed: T) -> Option<T::Value> {
 				self.0.skip_whitespace();
-				let c = self.0.peek()?;
-				if self.0.terminator.map_or(true, |t| &t != c) { Some(seed.deserialize(&mut *self.0)?) } else { None }
+				/*if let Some(c) = self.0.peek() {
+					if self.0.terminator.map_or(true, |t| &t != c) { Some(seed.deserialize(&mut *self.0)?) } else { None }
+				} else { None }*/
+				self.0.peek().try_map(|c| self.0.terminator.map_or(true, |t| t != c).try_then(|| seed.deserialize(&mut *self.0)) )?.flatten()
 			}
 		}
 		visitor.visit_seq(Seq(&mut *self))?
@@ -98,8 +103,8 @@ impl<'de, 't> de::Deserializer<'de> for &'t mut Deserializer<'de> {
     }
 
 	#[throws] fn deserialize_enum<V:Visitor<'de>>(self, _name: &'static str, _variants: &'static [&'static str], visitor: V) -> V::Value {
-		if self.r#match(&b'<') {
-			visitor.visit_enum(std::str::from_utf8(self.until(|c| c == &b'>')?).map_err(|e| Error(e.into()))?.into_deserializer())?
+		if self.r#match(b'<') {
+			visitor.visit_enum(std::str::from_utf8(self.until(|&c| c == b'>')?).map_err(|e| Error(e.into()))?.into_deserializer())?
 			//visitor.visit_enum( IntoDeserializer::<'_,Error>::into_deserializer(self.until(|c| c == &b'>')?) )?
 		} else {
 			struct Enum<'t, 'de: 't>(&'t mut Deserializer<'de>);
@@ -108,7 +113,7 @@ impl<'de, 't> de::Deserializer<'de> for &'t mut Deserializer<'de> {
 				type Variant = Self;
 				#[throws] fn variant_seed<V:de::DeserializeSeed<'de>>(self, seed: V) -> (V::Value, Self::Variant) {
 					let v = seed.deserialize(&mut *self.0)?;
-					self.0.skip(&b'=')?;
+					self.0.skip(b'=')?;
 					(v, self)
 				}
 			}
@@ -124,7 +129,7 @@ impl<'de, 't> de::Deserializer<'de> for &'t mut Deserializer<'de> {
     }
 
     #[throws] fn deserialize_identifier<V:Visitor<'de>>(self, visitor: V) -> V::Value {
-		let id = self.r#while(|&c| c.is_ascii_lowercase() || c == b'_' || c.is_ascii_digit());
+		let id = self.r#while(|&c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'#');
 		ensure!(!id.is_empty(), "Expected identifier, got '{}'", std::str::from_utf8(self.peekn(16)).map_err(|e| Error(e.into()))?);
     	visitor.visit_borrowed_str::<Error>(std::str::from_utf8(id).map_err(|e| Error(e.into()))?)?
 	}
@@ -136,6 +141,7 @@ impl<'de, 't> de::Deserializer<'de> for &'t mut Deserializer<'de> {
 	}
 
 	#[throws] fn deserialize_u8<V:Visitor<'de>>(self, visitor: V) -> V::Value { visitor.visit_u8(parse_partial(&mut self.bytes)?)? }
+	#[throws] fn deserialize_i8<V:Visitor<'de>>(self, visitor: V) -> V::Value { visitor.visit_i8(parse_partial(&mut self.bytes)?)? }
 	#[throws] fn deserialize_f32<V:Visitor<'de>>(self, visitor: V) -> V::Value { visitor.visit_f32(parse_partial(&mut self.bytes)?)? }
 
 	/*#[throws] fn deserialize_tuple_struct<V:Visitor<'de>>(self, _name: &'static str, len: usize, visitor: V) -> V::Value {
@@ -163,14 +169,13 @@ use serde::Deserialize;
 #[allow(non_camel_case_types)] #[derive(Deserialize,Debug)] #[serde(try_from = "&str")] struct key(u8);
 impl std::convert::TryFrom<&str> for key {
 	type Error = Error;
-	#[allow(unreachable_code)] #[throws] fn try_from(s: &str) -> Self {
-		let s = s.as_bytes();
+	#[allow(unreachable_code)] #[throws] fn try_from(str: &str) -> Self {
+		let s = str.as_bytes();
 		let note = b"c#d#ef#g#a#b".iter().enumerate().filter(|(_,&c)| c!=b'#')
 						.find({let f = s.first().ok_or(Error::custom("Invalid"))?; move |(_,&c)| c == *f}).ok_or(Error::custom("Invalid"))?.0;
 		let mut s = &s[1..];
-		eprintln!("{}", std::str::from_utf8(s).unwrap());
 		let sharp = if let Some(b'#') = s.get(0) { s = &s[1..]; true } else { false };
-		assert!(!s.is_empty());
+		assert!(!s.is_empty(), "{}", str);
 		key(12*(1+parse_partial::<i8>(&mut s)?) as u8 + note as u8 + if sharp { 1 } else { 0 })
 	}
 }
@@ -184,7 +189,15 @@ impl std::convert::TryFrom<&str> for key {
 
 #[allow(non_camel_case_types)] #[derive(Deserialize,Debug)] struct velocity(u8);
 #[allow(non_camel_case_types)] #[derive(Deserialize,Debug)] enum Opcode {
-	sample(std::path::PathBuf), ampeg_release(f32), ampeg_attack(f32), lokey(key), hikey(key), hivel(velocity), hirand(f32), pitch_keycenter(key), volume(u8), hicc64(u8), lorand(f32),
+	// Definition
+	sample(std::path::PathBuf), pitch_keycenter(key),
+	// Condition
+	lokey(key), hikey(key),
+	lovel(velocity), hivel(velocity),
+	lorand(f32), hirand(f32),
+	locc64(u8), hicc64(u8),
+	// Effect
+	volume(i8), ampeg_release(f32), ampeg_attack(f32),
 }
 #[allow(non_camel_case_types)] #[derive(Deserialize,Debug)] pub struct Rule {
 	level: Level,
